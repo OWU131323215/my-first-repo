@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>センサでボール転がしゲーム（動くゴール＋カウントダウン）</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.1.9/p5.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.1.3/socket.io.js"></script>
+    <style>
+      body {
+        font-family: "Segoe UI", sans-serif;
+        text-align: center;
+        background-color: #f0f8ff;
+        color: #333;
+        transition: background-color 0.5s, color 0.5s;
+      }
+      body.dark {
+        background-color: #222;
+        color: #eee;
+      }
+      button {
+        padding: 8px 16px;
+        font-size: 16px;
+        margin: 5px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      #themeBtn {
+        background-color: #666;
+        color: white;
+      }
+      #connect {
+        background-color: #4caf50;
+        color: white;
+      }
+      #retryBtn {
+        background-color: #2196f3;
+        color: white;
+        display: none;
+      }
+      #scoreArea {
+        margin-top: 10px;
+      }
+      #scoreBox {
+        font-size: 20px;
+        background: rgba(255, 255, 255, 0.6);
+        padding: 5px 15px;
+        border-radius: 10px;
+        display: inline-block;
+      }
+      #clearMsg {
+        font-size: 24px;
+        font-weight: bold;
+        margin-left: 10px;
+      }
+      body.dark #scoreBox {
+        background: rgba(50, 50, 50, 0.6);
+      }
+    </style>
+  </head>
+
+  <body>
+    <h1>🎮 傾けてボールをゴールに入れよう！</h1>
+    <div>
+      <button id="themeBtn">🌞 テーマ切替</button>
+    </div>
+
+    <div>
+      <div>あなたのID: <span id="myid"></span></div>
+      <button id="connect">▶ ゲームスタート</button>
+      <button id="retryBtn">🔄 リトライ</button>
+      <div>ゴールにボールが触れると「クリア！」になります。</div>
+    </div>
+
+    <div id="scoreArea">
+      <div id="scoreBox">残り時間: <span id="score">30</span> 秒</div>
+      <span id="clearMsg"></span>
+    </div>
+
+    <script>
+      // 🌗 テーマ切替
+      const themeBtn = document.getElementById("themeBtn");
+      themeBtn.addEventListener("click", () => {
+        document.body.classList.toggle("dark");
+        themeBtn.textContent = document.body.classList.contains("dark")
+          ? "🌙 ライトテーマ"
+          : "🌞 ダークテーマ";
+      });
+
+      // 🕒 スコア関連（カウントダウン）
+      let timeLeft = 30;
+      let timer;
+      const scoreSpan = document.getElementById("score");
+      const clearMsg = document.getElementById("clearMsg");
+      const connectBtn = document.getElementById("connect");
+      const retryBtn = document.getElementById("retryBtn");
+
+      function startTimer() {
+        timeLeft = 30;
+        clearMsg.textContent = "";
+        clearInterval(timer);
+        scoreSpan.textContent = timeLeft;
+        timer = setInterval(() => {
+          timeLeft--;
+          scoreSpan.textContent = timeLeft;
+          if (timeLeft <= 0) {
+            clearMsg.textContent = "⏰ タイムオーバー！";
+            clearInterval(timer);
+            noLoop();
+            retryBtn.style.display = "inline-block";
+          }
+        }, 1000);
+      }
+    </script>
+
+    <script>
+      // 🔗 ソケット設定（センサ値）
+      let socket = io.connect();
+      let b = 0,
+        g = 0;
+
+      let myid = sessionStorage.getItem("clientId");
+      if (!myid) {
+        myid = Math.random().toString(36).substring(2, 15);
+        sessionStorage.setItem("clientId", myid);
+      }
+      document.querySelector("#myid").innerHTML = myid;
+
+      connectBtn.addEventListener("click", startGame);
+      retryBtn.addEventListener("click", startGame);
+
+      socket.on("sensor", function (data) {
+        g = parseFloat(data.g);
+        b = parseFloat(data.b);
+      });
+
+      // 🎮 ゲーム変数
+      let x, y, z;
+      let r = 40;
+      let speed = 0.15; // 🎯 反応を少し上げる
+      let goalX, goalY;
+      let goalSize = 60;
+      let gameClear = false;
+      let gameOver = false;
+      let t = 0; // ゴールの動き用時間変数
+
+      function resetGame() {
+        x = 0;
+        y = 0;
+        z = 0;
+        goalX = random(-300, 300);
+        goalY = random(-300, 300);
+        gameClear = false;
+        gameOver = false;
+        clearMsg.textContent = "";
+        retryBtn.style.display = "none";
+        loop();
+        startTimer();
+      }
+
+      function startGame() {
+        socket.emit("join", "game");
+        connectBtn.style.display = "none";
+        resetGame();
+      }
+
+      function setup() {
+        createCanvas(800, 800, WEBGL);
+        camera(0, 800, 100, 0, 0, 0, 0, 1, 0);
+        noStroke();
+        textAlign(CENTER, CENTER);
+      }
+
+      function draw() {
+        background(0);
+        orbitControl();
+        ambientLight(60);
+        directionalLight(255, 255, 255, -1, -1, -1);
+
+        // 🪵 板（傾き反映）
+        push();
+        rotateX((-PI * b) / 180);
+        rotateY((PI * g) / 180);
+        translate(0, 0, -50);
+        specularMaterial(80);
+        box(800, 800, 30);
+        pop();
+
+        // 🎯 ゴール（ゆらゆら動く）
+        t += 0.02;
+        let moveX = 80 * sin(t); // 左右に揺れる
+        push();
+        translate(goalX + moveX, goalY, -50);
+        ambientMaterial(255, 0, 0);
+        box(goalSize, goalSize, 20);
+        pop();
+
+       // 🟡 ボール（色を変更した部分）
+push();
+x += speed * g;
+y += speed * b;
+z = -x * sin((PI * g) / 180) - y * sin((PI * b) / 180);
+
+// ⚠️ 落下でゲームオーバー
+if (z < -200 && !gameClear && !gameOver) {
+  gameOver = true;
+  clearMsg.textContent = "💥 落下！ゲームオーバー！";
+  clearInterval(timer);
+  noLoop();
+  retryBtn.style.display = "inline-block";
+}
+
+translate(x, y, z);
+
+
+ambientMaterial(0, 120, 255); 
+
+sphere(r);
+
+x = constrain(x, -width / 2, width / 2);
+y = constrain(y, -width / 2, width / 2);
+pop();
+
+        // 🎉 ゴール判定（動いているゴールに合わせる）
+        if (
+          abs(x - (goalX + moveX)) < goalSize / 2 &&
+          abs(y - goalY) < goalSize / 2 &&
+          !gameClear &&
+          !gameOver
+        ) {
+          gameClear = true;
+          clearMsg.textContent = "🎉 クリア！ 🎉";
+          clearInterval(timer);
+          noLoop();
+          retryBtn.style.display = "inline-block";
+        }
+      }
+    </script>
+  </body>
+</html>
